@@ -1,0 +1,24 @@
+// common.js - used by every page (plain JavaScript)
+// Opens and closes the small drop-down menus (bell, profile).
+
+function closeDropdowns(exceptMenu) {
+    document.querySelectorAll(".dropdown-menu.open").forEach(function (menu) {
+        if (menu !== exceptMenu) {
+            menu.classList.remove("open");
+        }
+    });
+}
+
+document.querySelectorAll("[data-dropdown-btn]").forEach(function (button) {
+    button.addEventListener("click", function (event) {
+        event.stopPropagation();
+        var menu = document.getElementById(button.dataset.dropdownBtn);
+        closeDropdowns(menu);
+        menu.classList.toggle("open");
+    });
+});
+
+// Clicking anywhere else closes the menus
+document.addEventListener("click", function () {
+    closeDropdowns(null);
+});
