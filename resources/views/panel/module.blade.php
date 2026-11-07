@@ -10,6 +10,9 @@
         <h1>{{ $m['title'] }}</h1>
         <p class="subtitle">{{ $m['subtitle'] }}</p>
     </div>
+    @if(!empty($m['mark_read']))
+        <button type="button" class="btn btn-blue" id="markAllRead">Mark all as read</button>
+    @endif
 </div>
 
 {{-- Small number cards --}}
@@ -17,8 +20,13 @@
     <div class="stat-grid cols-3">
         @foreach($m['stats'] as $stat)
             <div class="stat-card">
-                <p class="stat-label">{{ $stat[0] }}</p>
-                <p class="stat-number {{ strlen($stat[1]) > 6 ? 'small' : '' }}">{{ $stat[1] }}</p>
+                <div class="stat-top">
+                    <p class="stat-label">{{ $stat[0] }}</p>
+                    @if(!empty($stat[3]))
+                        @include('partials.icon', ['name' => $stat[3]])
+                    @endif
+                </div>
+                <p class="stat-number {{ strlen($stat[1]) > 6 ? 'small' : '' }}" id="{{ $stat[0] === 'Unread' ? 'unreadStatCount' : '' }}">{{ $stat[1] }}</p>
                 <p class="stat-note">{{ $stat[2] }}</p>
             </div>
         @endforeach
@@ -29,9 +37,6 @@
 <section class="box">
     <div class="box-head">
         <h2>{{ $m['table'] }}</h2>
-        @if(!empty($m['mark_read']))
-            <button type="button" class="btn btn-blue btn-sm" id="markAllRead">Mark all as read</button>
-        @endif
     </div>
 
     @if($m['toolbar'] ?? true)

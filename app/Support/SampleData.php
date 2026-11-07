@@ -6,7 +6,8 @@ use Illuminate\Support\Facades\Hash;
 
 /**
  * ALL the example data of the prototype lives in this one file.
- * Later, when you add a database, replace each method with a real query.
+ * Session state overlays on top so reservations, check-ins, waitlist promotions,
+ * trip schedule additions, and cargo updates persist during testing.
  */
 class SampleData
 {
@@ -28,7 +29,7 @@ class SampleData
             ],
             [
                 'username' => 'admin', 'email' => 'admin@sursea.example', 'password' => 'password',
-                'role' => 'admin', 'name' => 'Administrator', 'contact' => '',
+                'role' => 'admin', 'name' => 'Administrator', 'contact' => '+63 917 555 0100',
             ],
         ];
     }
@@ -51,6 +52,13 @@ class SampleData
         foreach (session('registered_accounts', []) as $account) {
             $matches = strtolower($account['username']) === $login || strtolower($account['email']) === $login;
             if ($matches && Hash::check($password, $account['password'])) {
+                // Check if admin approved this operator in session
+                if (($account['role'] ?? '') === 'operator' && !empty($account['app_id'])) {
+                    $decisions = session('decisions', []);
+                    if (($decisions[$account['app_id']] ?? '') === 'Approved') {
+                        $account['approved'] = true;
+                    }
+                }
                 unset($account['password']);
                 return $account;
             }
@@ -106,7 +114,33 @@ class SampleData
         // Trip 3 already left the port (the Figma shows "Departed" + "Full")
         $trips[3]['departed'] = true;
 
+        // Apply dynamic seat reductions from confirmed passenger reservations
+        $bookedSeats = session('trip_booked_seats', []);
+        foreach ($bookedSeats as $tripId => $bookedCount) {
+            if (isset($trips[$tripId])) {
+                $newLeft = max(0, $trips[$tripId]['left'] - (int) $bookedCount);
+                $trips[$tripId]['left'] = $newLeft;
+                if ($newLeft === 0) {
+                    $trips[$tripId]['status'] = 'Full';
+                } elseif ($newLeft <= 5) {
+                    $trips[$tripId]['status'] = 'Almost Full';
+                }
+            }
+        }
+
         return $trips;
+    }
+
+    // Trips displayed on the Waiting List page (matches the 6 ongoing cards in the PDF design)
+    public static function waitingListTrips(): array
+    {
+        $all = self::trips();
+        $list = [];
+        foreach ($all as $trip) {
+            $trip['capacity_text'] = '25/45';
+            $list[] = $trip;
+        }
+        return $list;
     }
 
     private static function makeTrip(int $id, string $from, string $to, string $short, string $lantsa, string $time, int $seats, int $left, string $status): array
@@ -128,9 +162,9 @@ class SampleData
             ['09:00 AM', 'Hanigad Island', 'M/B Alona Waves', 'Full', 'Waitlist Only'],
             ['10:30 AM', 'Dinagat Port', 'M/B Sea Charger', '5 Left', 'Boarding'],
             ['01:15 PM', 'Hikdop Island', 'M/B Island Voyager', '18 Left', 'Scheduled'],
-            ['02:00 PM', 'Nonoc Island', 'M/B Nonoc Express', '9 Left', 'Scheduled'],
-            ['03:30 PM', 'Hanigad Island', 'M/B Alona Waves', '14 Left', 'Scheduled'],
-            ['04:45 PM', 'Dinagat Port', 'M/B Sea Charger', '20 Left', 'Scheduled'],
+            ['01:15 PM', 'Hikdop Island', 'M/B Island Voyager', '18 Left', 'Boarding'],
+            ['01:15 PM', 'Hikdop Island', 'M/B Island Voyager', '18 Left', 'Boarding'],
+            ['01:15 PM', 'Hikdop Island', 'M/B Island Voyager', '18 Left', 'Boarding'],
         ];
     }
 
@@ -143,7 +177,7 @@ class SampleData
         $colors = [
             'Available' => 'green', 'Active' => 'green', 'Completed' => 'green', 'Checked in' => 'green',
             'Approved' => 'green', 'Delivered' => 'green', 'Verified' => 'green', 'Moved to seat' => 'green',
-            'Almost Full' => 'amber', 'Pending' => 'amber', 'Reserved' => 'amber', 'Unread' => 'amber',
+            'Almost Full' => 'amber', 'Pending' => 'amber', 'Pending approval' => 'amber', 'Reserved' => 'amber', 'Unread' => 'amber',
             'On Going' => 'blue', 'Needs info' => 'blue', 'Boarding' => 'blue', 'Departed' => 'blue',
             'Waiting' => 'blue', 'In transit' => 'blue',
             'Full' => 'red', 'Suspended' => 'red', 'Rejected' => 'red', 'Cancelled' => 'red',
@@ -214,23 +248,41 @@ class SampleData
     // [label, number, small text, icon]
     public static function operatorStats(): array
     {
+        $manifest = self::manifestRecords('MV Isla Norte');
+        $cargo = self::cargoRecords('MV Isla Norte');
+        $waitlist = self::waitlistRecords();
+
+        $reservedSeats = array_sum(array_column($manifest, 'passengers'));
+        $pendingCargo = count(array_filter($cargo, fn ($c) => $c['status'] === 'Pending'));
+        $waitingCount = count(array_filter($waitlist, fn ($w) => $w['status'] === 'Waiting'));
+
         return [
             ['Trips Today', '6', 'Scheduled crossings', 'calendar'],
-            ['Seats Reserved', '140', 'Across today’s trips', 'armchair'],
-            ['Waiting List', '9', 'Passengers in queue', 'waiting'],
-            ['Cargo Pending', '14', 'Items awaiting check-in', 'box'],
+            ['Seats Reserved', (string) max(140, $reservedSeats), 'Across today’s trips', 'armchair'],
+            ['Waiting List', (string) max(9, $waitingCount), 'Passengers in queue', 'waiting'],
+            ['Cargo Pending', (string) max(14, $pendingCargo), 'Items awaiting check-in', 'box'],
         ];
     }
 
     // [route, via, departure, seats left, status]
     public static function operatorLiveTrips(): array
     {
-        return [
-            ['Surigao City → Dinagat', 'Via Surigao City Port', '05:00 AM', '12 left', 'Available'],
-            ['Surigao City → Cabungaan', 'Via San Jose Wharf', '07:30 AM', '2 left', 'Almost Full'],
-            ['Surigao City → Cagdianao', 'Via Cagdianao Pier', '12:00 PM', '5 left', 'On Going'],
-            ['Surigao City → Del Carmen', 'Via Del Carmen Port', '03:00 PM', '9 left', 'Scheduled'],
-        ];
+        $all = self::tripScheduleRecords();
+        $mine = array_filter($all, fn ($t) => $t['lantsa'] === 'MV Isla Norte');
+
+        $rows = [];
+        foreach ($mine as $t) {
+            $rows[] = [
+                $t['route'],
+                'Via '.$t['port'],
+                $t['departure'],
+                $t['seats_left'],
+                $t['status'],
+                $t['id'],
+            ];
+        }
+
+        return $rows;
     }
 
     // ===============================================================
@@ -247,7 +299,12 @@ class SampleData
             }
         }
 
-        return 12 - $done;
+        $extra = count(array_filter(
+            session('registered_accounts', []),
+            fn ($acc) => ($acc['role'] ?? '') === 'operator'
+        ));
+
+        return max(0, 12 + $extra - $done);
     }
 
     public static function applications(): array
@@ -260,6 +317,26 @@ class SampleData
             'OP-2026-037' => self::makeApp('OP-2026-037', 'Nonoc Express Lines', 'Liza Gomez', 'liza@nonocexpress.example', '+63 921 555 0199', 'MV Nonoc Runner', 44, 'Surigao City → Nonoc Island', 'Yesterday, 09:05', 'yesterday at 09:05', 'Pending'),
             'OP-2026-036' => self::makeApp('OP-2026-036', 'Cabungaan Sea Transport', 'Carlo Mendoza', 'carlo@cabungaansea.example', '+63 922 555 0166', 'MV Cabungaan', 38, 'Surigao City → Cabungaan', '2 days ago, 15:40', '2 days ago at 15:40', 'Needs info'),
         ];
+
+        // Include newly registered operators from session
+        foreach (session('registered_accounts', []) as $idx => $acc) {
+            if (($acc['role'] ?? '') === 'operator') {
+                $id = $acc['app_id'] ?? ('OP-2026-0'.(42 + $idx));
+                $apps[$id] = self::makeApp(
+                    $id,
+                    $acc['business'] ?? 'New Operator',
+                    $acc['name'] ?? $acc['username'],
+                    $acc['email'],
+                    $acc['contact'] ?? '',
+                    $acc['lantsa'] ?? 'MV Lantsa',
+                    40,
+                    'Surigao City → Dinagat',
+                    'Just now',
+                    'just now',
+                    'Pending'
+                );
+            }
+        }
 
         // Apply the decisions the admin made in this session
         foreach (session('decisions', []) as $id => $status) {
@@ -301,15 +378,20 @@ class SampleData
 
         $list = [[
             'business' => 'Isla Norte Transport', 'vessel' => 'MV Isla Norte',
-            'route' => 'Surigao City → Dinagat', 'status' => 'Active', 'link' => url('admin/lantsa-routes'),
+            'route' => 'Surigao → Dinagat', 'status' => 'Active', 'link' => url('admin/lantsa-routes'),
         ]];
 
         foreach (['OP-2026-041', 'OP-2026-040', 'OP-2026-039'] as $id) {
-            $app = $apps[$id];
-            $list[] = [
-                'business' => $app['business'], 'vessel' => $app['lantsa'], 'route' => $app['route'],
-                'status' => $app['status'], 'link' => url('admin/approvals/'.$id),
-            ];
+            if (isset($apps[$id])) {
+                $app = $apps[$id];
+                $list[] = [
+                    'business' => $app['business'],
+                    'vessel' => $app['lantsa'],
+                    'route' => str_replace('Surigao City', 'Surigao', $app['route']),
+                    'status' => $app['status'] === 'Approved' ? 'Active' : $app['status'],
+                    'link' => url('admin/approvals/'.$id),
+                ];
+            }
         }
 
         return $list;
@@ -317,11 +399,12 @@ class SampleData
 
     public static function lantsaPreview(): array
     {
-        return [
-            ['MV Isla Norte', 'Surigao City → Dinagat', 'Active'],
-            ['MV Marajaw', 'Surigao City → San Jose', 'Active'],
-            ['MV Island Star', 'Surigao City → Libjo', 'Suspended'],
-        ];
+        $vessels = self::lantsaRecords();
+        $preview = [];
+        foreach (array_slice($vessels, 0, 3) as $v) {
+            $preview[] = [$v['lantsa'], $v['route'], $v['status']];
+        }
+        return $preview;
     }
 
     public static function dailyReport(): array
@@ -355,9 +438,259 @@ class SampleData
     }
 
     // ===============================================================
-    // TABLE PAGES (one layout, different data)
-    // ---------------------------------------------------------------
-    // 'columns' = [column title, type]   type: bold | text | status
+    // RICH MODULE DATA (ADMIN + OPERATOR) WITH SESSION OVERLAYS
+    // ===============================================================
+
+    public static function lantsaRecords(): array
+    {
+        $defaults = [
+            ['id' => 'LR-1', 'lantsa' => 'MV Isla Norte', 'operator' => 'Isla Norte Transport', 'route' => 'Surigao City → Dinagat', 'port' => 'Surigao City Port', 'seats' => 40, 'cargo_limit' => '50 items', 'fare' => 150, 'status' => 'Active'],
+            ['id' => 'LR-2', 'lantsa' => 'MV Marajaw', 'operator' => 'Marajaw Transport', 'route' => 'Surigao City → San Jose', 'port' => 'San Jose Wharf', 'seats' => 36, 'cargo_limit' => '45 items', 'fare' => 150, 'status' => 'Active'],
+            ['id' => 'LR-3', 'lantsa' => 'MV Island Star', 'operator' => 'Island Star Lines', 'route' => 'Surigao City → Libjo', 'port' => 'Libjo Port', 'seats' => 20, 'cargo_limit' => '25 items', 'fare' => 180, 'status' => 'Suspended'],
+            ['id' => 'LR-4', 'lantsa' => 'M/B Nonoc Express', 'operator' => 'Nonoc Express Lines', 'route' => 'Surigao City → Nonoc Island', 'port' => 'Surigao City Port', 'seats' => 44, 'cargo_limit' => '50 items', 'fare' => 120, 'status' => 'Active'],
+            ['id' => 'LR-5', 'lantsa' => 'M/B Alona Waves', 'operator' => 'Alona Marine', 'route' => 'Surigao City → Hanigad Island', 'port' => 'Hanigad Pier', 'seats' => 30, 'cargo_limit' => '35 items', 'fare' => 130, 'status' => 'Active'],
+            ['id' => 'LR-6', 'lantsa' => 'M/B Island Voyager', 'operator' => 'Voyager Sea Lines', 'route' => 'Surigao City → Hikdop Island', 'port' => 'Hikdop Wharf', 'seats' => 36, 'cargo_limit' => '40 items', 'fare' => 140, 'status' => 'Active'],
+        ];
+
+        $custom = session('custom_lantsas', []);
+        $all = array_merge($custom, $defaults);
+
+        $statusOverrides = session('lantsa_statuses', []);
+        foreach ($all as &$item) {
+            if (isset($statusOverrides[$item['id']])) {
+                $item['status'] = $statusOverrides[$item['id']];
+            }
+        }
+
+        return $all;
+    }
+
+    public static function tripScheduleRecords(?string $lantsaFilter = null): array
+    {
+        $defaults = [
+            [
+                'id' => 'TS-101', 'departure' => '05:00 AM', 'arrival' => '06:30 AM', 'date' => 'Today, Sept 26',
+                'route' => 'Surigao City → Dinagat', 'port' => 'Surigao City Port',
+                'lantsa' => 'MV Isla Norte', 'operator' => 'Isla Norte Transport',
+                'capacity' => 40, 'reserved' => 28, 'seats_left' => '12 left', 'cargo_count' => 12,
+                'status' => 'Completed', 'op_status' => 'Available',
+            ],
+            [
+                'id' => 'TS-102', 'departure' => '05:00 AM', 'arrival' => '06:15 AM', 'date' => 'Today, Sept 26',
+                'route' => 'Surigao City → Cabungaan', 'port' => 'San Jose Wharf',
+                'lantsa' => 'MV Marajaw', 'operator' => 'Marajaw Transport',
+                'capacity' => 36, 'reserved' => 32, 'seats_left' => '4 left', 'cargo_count' => 9,
+                'status' => 'Completed', 'op_status' => 'Completed',
+            ],
+            [
+                'id' => 'TS-103', 'departure' => '07:30 AM', 'arrival' => '09:00 AM', 'date' => 'Today, Sept 26',
+                'route' => 'Surigao City → Cabungaan', 'port' => 'San Jose Wharf',
+                'lantsa' => 'MV Isla Norte', 'operator' => 'Isla Norte Transport',
+                'capacity' => 40, 'reserved' => 38, 'seats_left' => '2 left', 'cargo_count' => 17,
+                'status' => 'Boarding', 'op_status' => 'Almost Full',
+            ],
+            [
+                'id' => 'TS-104', 'departure' => '07:30 AM', 'arrival' => '09:10 AM', 'date' => 'Today, Sept 26',
+                'route' => 'Surigao City → Cagdianao', 'port' => 'Cagdianao Pier',
+                'lantsa' => 'MV Isla Norte', 'operator' => 'Isla Norte Transport',
+                'capacity' => 40, 'reserved' => 40, 'seats_left' => 'Full', 'cargo_count' => 15,
+                'status' => 'On Going', 'op_status' => 'On Going',
+            ],
+            [
+                'id' => 'TS-105', 'departure' => '10:30 AM', 'arrival' => '12:00 PM', 'date' => 'Today, Sept 26',
+                'route' => 'Surigao City → Del Carmen', 'port' => 'Del Carmen Port',
+                'lantsa' => 'MV Marajaw', 'operator' => 'Marajaw Transport',
+                'capacity' => 36, 'reserved' => 27, 'seats_left' => '9 left', 'cargo_count' => 11,
+                'status' => 'Boarding', 'op_status' => 'Boarding',
+            ],
+            [
+                'id' => 'TS-106', 'departure' => '12:00 PM', 'arrival' => '01:30 PM', 'date' => 'Today, Sept 26',
+                'route' => 'Dinagat → Surigao City', 'port' => 'Surigao City Port',
+                'lantsa' => 'MV Isla Norte', 'operator' => 'Isla Norte Transport',
+                'capacity' => 40, 'reserved' => 35, 'seats_left' => '5 left', 'cargo_count' => 9,
+                'status' => 'On Going', 'op_status' => 'On Going',
+            ],
+            [
+                'id' => 'TS-107', 'departure' => '01:15 PM', 'arrival' => '02:30 PM', 'date' => 'Today, Sept 26',
+                'route' => 'Surigao City → Hikdop Island', 'port' => 'Hikdop Wharf',
+                'lantsa' => 'M/B Island Voyager', 'operator' => 'Voyager Sea Lines',
+                'capacity' => 36, 'reserved' => 18, 'seats_left' => '18 left', 'cargo_count' => 6,
+                'status' => 'Scheduled', 'op_status' => 'Scheduled',
+            ],
+            [
+                'id' => 'TS-108', 'departure' => '03:00 PM', 'arrival' => '04:30 PM', 'date' => 'Today, Sept 26',
+                'route' => 'Surigao City → Del Carmen', 'port' => 'Del Carmen Port',
+                'lantsa' => 'MV Isla Norte', 'operator' => 'Isla Norte Transport',
+                'capacity' => 40, 'reserved' => 31, 'seats_left' => '9 left', 'cargo_count' => 7,
+                'status' => 'Scheduled', 'op_status' => 'Scheduled',
+            ],
+            [
+                'id' => 'TS-109', 'departure' => '04:30 PM', 'arrival' => '06:00 PM', 'date' => 'Today, Sept 26',
+                'route' => 'Surigao City → Libjo', 'port' => 'Libjo Port',
+                'lantsa' => 'MV Island Star', 'operator' => 'Island Star Lines',
+                'capacity' => 20, 'reserved' => 0, 'seats_left' => '20 left', 'cargo_count' => 0,
+                'status' => 'Cancelled', 'op_status' => 'Cancelled',
+            ],
+        ];
+
+        $custom = session('custom_trips', []);
+        $all = array_merge($custom, $defaults);
+
+        $statusOverrides = session('trip_statuses', []);
+        foreach ($all as &$trip) {
+            if (isset($statusOverrides[$trip['id']])) {
+                $trip['status'] = $statusOverrides[$trip['id']];
+                $trip['op_status'] = $statusOverrides[$trip['id']];
+            }
+        }
+
+        if ($lantsaFilter) {
+            $all = array_values(array_filter($all, fn ($t) => $t['lantsa'] === $lantsaFilter));
+        }
+
+        return $all;
+    }
+
+    public static function manifestRecords(?string $lantsaFilter = null): array
+    {
+        $defaults = [
+            [
+                'ref' => '0000-00001', 'name' => 'Robert Zabala', 'contact' => '09123123123',
+                'route' => 'Dinagat → Surigao City', 'departure' => '12:00 PM', 'date' => '26-09-2026',
+                'lantsa' => 'MV Isla Norte', 'passengers' => 1, 'cargo_qty' => 2,
+                'total' => 200, 'status' => 'Checked in',
+            ],
+            [
+                'ref' => '0000-00002', 'name' => 'Maria Dela Cruz', 'contact' => '09175550112',
+                'route' => 'Surigao City → Cabungaan', 'departure' => '05:00 AM', 'date' => '26-09-2026',
+                'lantsa' => 'MV Marajaw', 'passengers' => 2, 'cargo_qty' => 1,
+                'total' => 325, 'status' => 'Checked in',
+            ],
+            [
+                'ref' => '0000-00003', 'name' => 'Juan Reyes', 'contact' => '09171234567',
+                'route' => 'Surigao City → Dinagat', 'departure' => '05:00 AM', 'date' => '26-09-2026',
+                'lantsa' => 'MV Isla Norte', 'passengers' => 3, 'cargo_qty' => 0,
+                'total' => 450, 'status' => 'Reserved',
+            ],
+            [
+                'ref' => '0000-00004', 'name' => 'Ana Santos', 'contact' => '09181234567',
+                'route' => 'Libjo → Surigao City', 'departure' => '12:00 PM', 'date' => '26-09-2026',
+                'lantsa' => 'MV Isla Norte', 'passengers' => 1, 'cargo_qty' => 1,
+                'total' => 175, 'status' => 'Reserved',
+            ],
+            [
+                'ref' => '0000-00005', 'name' => 'Pedro Lim', 'contact' => '09205550188',
+                'route' => 'San Jose → Surigao City', 'departure' => '04:30 PM', 'date' => '26-09-2026',
+                'lantsa' => 'MV Marajaw', 'passengers' => 2, 'cargo_qty' => 0,
+                'total' => 300, 'status' => 'Waiting',
+            ],
+            [
+                'ref' => '0000-00006', 'name' => 'Carlo Mendoza', 'contact' => '09225550166',
+                'route' => 'Surigao City → Cagdianao', 'departure' => '07:30 AM', 'date' => '26-09-2026',
+                'lantsa' => 'MV Isla Norte', 'passengers' => 3, 'cargo_qty' => 2,
+                'total' => 500, 'status' => 'Waiting',
+            ],
+        ];
+
+        $custom = session('custom_manifests', []);
+        $all = array_merge($custom, $defaults);
+
+        $statusOverrides = session('manifest_statuses', []);
+        foreach ($all as &$item) {
+            if (isset($statusOverrides[$item['ref']])) {
+                $item['status'] = $statusOverrides[$item['ref']];
+            }
+        }
+
+        if ($lantsaFilter) {
+            $all = array_values(array_filter($all, fn ($m) => $m['lantsa'] === $lantsaFilter));
+        }
+
+        return $all;
+    }
+
+    public static function waitlistRecords(): array
+    {
+        $defaults = [
+            ['id' => 'WL-1', 'position' => 1, 'ref' => '0000-00005', 'name' => 'Pedro Lim', 'contact' => '09205550188', 'route' => 'San Jose → Surigao City', 'lantsa' => 'MV Isla Norte', 'passengers' => 2, 'status' => 'Waiting'],
+            ['id' => 'WL-2', 'position' => 2, 'ref' => '0000-00007', 'name' => 'Liza Gomez', 'contact' => '09215550199', 'route' => 'San Jose → Surigao City', 'lantsa' => 'MV Isla Norte', 'passengers' => 1, 'status' => 'Waiting'],
+            ['id' => 'WL-3', 'position' => 3, 'ref' => '0000-00006', 'name' => 'Carlo Mendoza', 'contact' => '09225550166', 'route' => 'Surigao City → Cagdianao', 'lantsa' => 'MV Isla Norte', 'passengers' => 3, 'status' => 'Waiting'],
+            ['id' => 'WL-4', 'position' => 4, 'ref' => '0000-00008', 'name' => 'Rosa Dela Cruz', 'contact' => '09195550144', 'route' => 'Surigao City → Cagdianao', 'lantsa' => 'MV Isla Norte', 'passengers' => 1, 'status' => 'Moved to seat'],
+        ];
+
+        $custom = session('custom_waitlist', []);
+        $all = array_merge($defaults, $custom);
+
+        $statusOverrides = session('waitlist_statuses', []);
+        foreach ($all as $idx => &$item) {
+            $item['position'] = $idx + 1;
+            if (isset($statusOverrides[$item['ref']])) {
+                $item['status'] = $statusOverrides[$item['ref']];
+            }
+        }
+
+        return $all;
+    }
+
+    public static function cargoRecords(?string $lantsaFilter = null): array
+    {
+        $defaults = [
+            [
+                'ref' => '0000-00111', 'sender' => 'Robert Zabala', 'sender_contact' => '09123123123',
+                'receiver' => 'Earl Fermillan', 'receiver_contact' => '09123123123',
+                'items' => 'Box of Coca Cola, Box of Sprite', 'qty' => 9,
+                'route' => 'Dinagat → Surigao City', 'departure' => '12:00 PM',
+                'lantsa' => 'MV Isla Norte', 'fee' => 225, 'status' => 'Pending',
+            ],
+            [
+                'ref' => '0000-00112', 'sender' => 'Maria Dela Cruz', 'sender_contact' => '09175550112',
+                'receiver' => 'Rosa Dela Cruz', 'receiver_contact' => '09195550144',
+                'items' => 'Sack of rice', 'qty' => 4,
+                'route' => 'Surigao City → Cabungaan', 'departure' => '05:00 AM',
+                'lantsa' => 'MV Marajaw', 'fee' => 100, 'status' => 'In transit',
+            ],
+            [
+                'ref' => '0000-00113', 'sender' => 'Juan Reyes', 'sender_contact' => '09171234567',
+                'receiver' => 'Mark Reyes', 'receiver_contact' => '09179998877',
+                'items' => 'Box of fish', 'qty' => 6,
+                'route' => 'Surigao City → Dinagat', 'departure' => '05:00 AM',
+                'lantsa' => 'MV Isla Norte', 'fee' => 150, 'status' => 'Delivered',
+            ],
+            [
+                'ref' => '0000-00114', 'sender' => 'Ana Santos', 'sender_contact' => '09181234567',
+                'receiver' => 'Ben Santos', 'receiver_contact' => '09187654321',
+                'items' => 'Bag of vegetables', 'qty' => 3,
+                'route' => 'Libjo → Surigao City', 'departure' => '12:00 PM',
+                'lantsa' => 'MV Isla Norte', 'fee' => 75, 'status' => 'Delivered',
+            ],
+            [
+                'ref' => '0000-00115', 'sender' => 'Pedro Lim', 'sender_contact' => '09205550188',
+                'receiver' => 'Elena Lim', 'receiver_contact' => '09201112233',
+                'items' => 'Crate of hardware supplies', 'qty' => 5,
+                'route' => 'Surigao City → Cagdianao', 'departure' => '07:30 AM',
+                'lantsa' => 'MV Isla Norte', 'fee' => 125, 'status' => 'In transit',
+            ],
+        ];
+
+        $custom = session('custom_cargos', []);
+        $all = array_merge($custom, $defaults);
+
+        $statusOverrides = session('cargo_statuses', []);
+        foreach ($all as &$item) {
+            if (isset($statusOverrides[$item['ref']])) {
+                $item['status'] = $statusOverrides[$item['ref']];
+            }
+        }
+
+        if ($lantsaFilter) {
+            $all = array_values(array_filter($all, fn ($c) => $c['lantsa'] === $lantsaFilter));
+        }
+
+        return $all;
+    }
+
+    // ===============================================================
+    // TABLE PAGES CONFIG (Notifications & Fallback)
     // ===============================================================
 
     public static function module(string $area, string $key): ?array
@@ -367,108 +700,19 @@ class SampleData
         return $all[$key] ?? null;
     }
 
-    // ---------- ADMIN modules that were missing in the Figma ----------
     private static function adminModules(): array
     {
         $eyebrow = 'ADMIN MANAGEMENT';
 
         return [
-            'lantsa-routes' => [
-                'eyebrow' => $eyebrow, 'crumb' => 'Lantsa & Routes',
-                'title' => 'Lantsa & Routes',
-                'subtitle' => 'Manage registered vessels, assigned routes, and operating status.',
-                'stats' => [
-                    ['Registered lantsas', '32', 'Across all operators'],
-                    ['Active routes', '18', 'Open for reservations'],
-                    ['Suspended vessels', '2', 'Not accepting trips'],
-                ],
-                'table' => 'Lantsa directory',
-                'search' => 'Search lantsa, operator, or route',
-                'statuses' => ['Active', 'Suspended'],
-                'columns' => [['Lantsa', 'bold'], ['Operator', 'text'], ['Route', 'text'], ['Passenger seats', 'text'], ['Status', 'status']],
-                'rows' => [
-                    ['MV Isla Norte', 'Isla Norte Transport', 'Surigao City → Dinagat', '40', 'Active'],
-                    ['MV Marajaw', 'Marajaw Transport', 'Surigao City → San Jose', '36', 'Active'],
-                    ['MV Island Star', 'Island Star Lines', 'Surigao City → Libjo', '20', 'Suspended'],
-                    ['M/B Nonoc Express', 'Nonoc Express Lines', 'Surigao City → Nonoc Island', '44', 'Active'],
-                    ['M/B Alona Waves', 'Alona Marine', 'Surigao City → Hanigad Island', '30', 'Active'],
-                ],
-                'note' => 'Showing 5 lantsas · Example data',
-            ],
-            'trip-schedule' => [
-                'eyebrow' => $eyebrow, 'crumb' => 'Trip Schedule',
-                'title' => 'Trip schedule',
-                'subtitle' => 'See every scheduled crossing across all operators.',
-                'stats' => [
-                    ['Trips today', '48', 'Scheduled crossings'],
-                    ['Completed', '18', 'Already arrived'],
-                    ['Remaining', '30', 'Still to depart'],
-                ],
-                'table' => 'Today’s crossings',
-                'search' => 'Search route or lantsa',
-                'statuses' => ['Completed', 'On Going', 'Boarding', 'Scheduled', 'Cancelled'],
-                'columns' => [['Departure', 'bold'], ['Route', 'text'], ['Lantsa', 'text'], ['Seats left', 'text'], ['Status', 'status']],
-                'rows' => [
-                    ['05:00 AM', 'Surigao City → Dinagat', 'MV Isla Norte', '12 left', 'Completed'],
-                    ['05:00 AM', 'Surigao City → Cabungaan', 'MV Marajaw', '4 left', 'Completed'],
-                    ['07:30 AM', 'Surigao City → Cagdianao', 'MV Isla Norte', 'Full', 'On Going'],
-                    ['10:30 AM', 'Surigao City → Del Carmen', 'MV Marajaw', '9 left', 'Boarding'],
-                    ['01:15 PM', 'Surigao City → Hikdop Island', 'M/B Island Voyager', '18 left', 'Scheduled'],
-                    ['04:30 PM', 'Surigao City → Libjo', 'MV Island Star', '20 left', 'Cancelled'],
-                ],
-                'note' => 'Showing 6 of 48 trips · Example data',
-            ],
-            'passenger-manifest' => [
-                'eyebrow' => $eyebrow, 'crumb' => 'Passenger Manifest',
-                'title' => 'Passenger manifest',
-                'subtitle' => 'Check the passenger list of every crossing before it departs.',
-                'stats' => [
-                    ['Checked in', '624', 'Across completed trips'],
-                    ['Reserved', '88', 'Waiting to check in'],
-                    ['On waiting list', '9', 'Passengers in queue'],
-                ],
-                'table' => 'Passenger list',
-                'search' => 'Search passenger or reference code',
-                'statuses' => ['Checked in', 'Reserved', 'Waiting'],
-                'columns' => [['Reference', 'bold'], ['Passenger', 'text'], ['Route', 'text'], ['Lantsa', 'text'], ['Passengers', 'text'], ['Status', 'status']],
-                'rows' => [
-                    ['0000-00001', 'Robert Zabala', 'Dinagat → Surigao City', 'MV Isla Norte', '1', 'Checked in'],
-                    ['0000-00002', 'Maria Dela Cruz', 'Surigao City → Cabungaan', 'MV Marajaw', '2', 'Checked in'],
-                    ['0000-00003', 'Juan Reyes', 'Surigao City → Dinagat', 'MV Isla Norte', '3', 'Reserved'],
-                    ['0000-00004', 'Ana Santos', 'Libjo → Surigao City', 'MV Isla Norte', '1', 'Reserved'],
-                    ['0000-00005', 'Pedro Lim', 'San Jose → Surigao City', 'MV Marajaw', '2', 'Waiting'],
-                ],
-                'note' => 'Showing 5 passengers · Example data',
-            ],
-            'cargo' => [
-                'eyebrow' => $eyebrow, 'crumb' => 'Cargo',
-                'title' => 'Cargo',
-                'subtitle' => 'Monitor cargo registered by passengers across all operators.',
-                'stats' => [
-                    ['Cargo registered', '86', 'Items across the network'],
-                    ['Pending check-in', '14', 'Items awaiting check-in'],
-                    ['Delivered', '52', 'Already received'],
-                ],
-                'table' => 'Cargo deliveries',
-                'search' => 'Search tracking ID, sender, or receiver',
-                'statuses' => ['Pending', 'In transit', 'Delivered'],
-                'columns' => [['Tracking ID', 'bold'], ['Sender', 'text'], ['Receiver', 'text'], ['Items', 'text'], ['Qty', 'text'], ['Lantsa', 'text'], ['Status', 'status']],
-                'rows' => [
-                    ['0000-00111', 'Robert Zabala', 'Earl Fermillan', 'Box of Coca Cola, Box of Sprite', '9', 'MV Isla Norte', 'Pending'],
-                    ['0000-00112', 'Maria Dela Cruz', 'Rosa Dela Cruz', 'Sack of rice', '4', 'MV Marajaw', 'In transit'],
-                    ['0000-00113', 'Juan Reyes', 'Mark Reyes', 'Box of fish', '6', 'MV Isla Norte', 'Delivered'],
-                    ['0000-00114', 'Ana Santos', 'Ben Santos', 'Bag of vegetables', '3', 'MV Isla Norte', 'Delivered'],
-                ],
-                'note' => 'Showing 4 deliveries · Example data',
-            ],
             'notifications' => [
                 'eyebrow' => $eyebrow, 'crumb' => 'Notifications',
                 'title' => 'Notifications',
                 'subtitle' => 'Important updates about applications, trips, and cargo.',
                 'stats' => [
-                    ['Unread', '3', 'Need your attention'],
-                    ['Today', '5', 'Received today'],
-                    ['This week', '21', 'All notifications'],
+                    ['Unread', '3', 'Need your attention', 'bell'],
+                    ['Today', '5', 'Received today', 'calendar'],
+                    ['This week', '21', 'All notifications', 'clipboard'],
                 ],
                 'table' => 'Latest notifications',
                 'search' => 'Search notifications',
@@ -487,164 +731,19 @@ class SampleData
         ];
     }
 
-    // ---------- OPERATOR pages (for MV Isla Norte only) ----------
     private static function operatorModules(): array
     {
         $eyebrow = 'OPERATOR OVERVIEW';
 
         return [
-            'vessel-routes' => [
-                'eyebrow' => $eyebrow, 'crumb' => 'My Vessel & Routes',
-                'title' => 'My Vessel & Routes',
-                'subtitle' => 'Your lantsa and the routes it is allowed to run.',
-                'stats' => [
-                    ['Vessel', 'MV Isla Norte', 'Passenger & cargo'],
-                    ['Passenger seats', '40', 'Total capacity'],
-                    ['Routes', '4', 'Approved by admin'],
-                ],
-                'table' => 'My routes',
-                'search' => 'Search route',
-                'statuses' => ['Active'],
-                'columns' => [['Route', 'bold'], ['Via', 'text'], ['Passenger fare', 'text'], ['Status', 'status']],
-                'rows' => [
-                    ['Surigao City → Dinagat', 'Surigao City Port', '150', 'Active'],
-                    ['Surigao City → Cabungaan', 'San Jose Wharf', '150', 'Active'],
-                    ['Surigao City → Cagdianao', 'Cagdianao Pier', '150', 'Active'],
-                    ['Surigao City → Del Carmen', 'Del Carmen Port', '150', 'Active'],
-                ],
-                'note' => 'Showing 4 routes · Example data',
-            ],
-            'trip-schedule' => [
-                'eyebrow' => $eyebrow, 'crumb' => 'Trip Schedule',
-                'title' => 'Trip schedule',
-                'subtitle' => 'All crossings of MV Isla Norte for today.',
-                'stats' => [
-                    ['Trips today', '6', 'Scheduled crossings'],
-                    ['Departed', '2', 'Already left the port'],
-                    ['Remaining', '4', 'Still to depart'],
-                ],
-                'table' => 'Today’s crossings',
-                'search' => 'Search route',
-                'statuses' => ['Available', 'Almost Full', 'On Going', 'Scheduled'],
-                'columns' => [['Departure', 'bold'], ['Route', 'text'], ['Seats reserved', 'text'], ['Seats left', 'text'], ['Status', 'status']],
-                'rows' => [
-                    ['05:00 AM', 'Surigao City → Dinagat', '28', '12 left', 'Available'],
-                    ['07:30 AM', 'Surigao City → Cabungaan', '38', '2 left', 'Almost Full'],
-                    ['12:00 PM', 'Surigao City → Cagdianao', '35', '5 left', 'On Going'],
-                    ['03:00 PM', 'Surigao City → Del Carmen', '31', '9 left', 'Scheduled'],
-                ],
-                'note' => 'Showing 4 trips · Example data',
-            ],
-            'waiting-list' => [
-                'eyebrow' => $eyebrow, 'crumb' => 'Waiting List',
-                'title' => 'Waiting list',
-                'subtitle' => 'Passengers waiting for a seat on a full trip.',
-                'stats' => [
-                    ['In queue', '9', 'Passengers waiting'],
-                    ['Moved to seat', '3', 'Seat became available'],
-                    ['Full trips', '2', 'With a waiting list'],
-                ],
-                'table' => 'Waiting passengers',
-                'search' => 'Search passenger or route',
-                'statuses' => ['Waiting', 'Moved to seat'],
-                'columns' => [['Position', 'bold'], ['Passenger', 'text'], ['Route', 'text'], ['Passengers', 'text'], ['Status', 'status']],
-                'rows' => [
-                    ['1', 'Pedro Lim', 'San Jose → Surigao City', '2', 'Waiting'],
-                    ['2', 'Liza Gomez', 'San Jose → Surigao City', '1', 'Waiting'],
-                    ['3', 'Carlo Mendoza', 'Surigao City → Cagdianao', '3', 'Waiting'],
-                    ['4', 'Rosa Dela Cruz', 'Surigao City → Cagdianao', '1', 'Moved to seat'],
-                ],
-                'note' => 'Showing 4 passengers · Example data',
-            ],
-            'check-in' => [
-                'eyebrow' => $eyebrow, 'crumb' => 'Check-in',
-                'title' => 'Passenger check-in',
-                'subtitle' => 'Verify the reservation code of each passenger before boarding.',
-                'stats' => [
-                    ['Checked in', '96', 'Passengers today'],
-                    ['Waiting to check in', '44', 'Reserved but not yet at the port'],
-                    ['Next departure', '12:00 PM', 'Surigao City → Cagdianao'],
-                ],
-                'table' => 'Reservations to verify',
-                'search' => 'Search reference code or passenger',
-                'statuses' => ['Checked in', 'Reserved'],
-                'columns' => [['Reference', 'bold'], ['Passenger', 'text'], ['Route', 'text'], ['Passengers', 'text'], ['Status', 'status']],
-                'rows' => [
-                    ['0000-00001', 'Robert Zabala', 'Dinagat → Surigao City', '1', 'Checked in'],
-                    ['0000-00003', 'Juan Reyes', 'Surigao City → Dinagat', '3', 'Reserved'],
-                    ['0000-00004', 'Ana Santos', 'Libjo → Surigao City', '1', 'Reserved'],
-                ],
-                'note' => 'Showing 3 reservations · Example data',
-            ],
-            'manifest' => [
-                'eyebrow' => $eyebrow, 'crumb' => 'Passenger Manifest',
-                'title' => 'Passenger manifest',
-                'subtitle' => 'The official passenger list of MV Isla Norte.',
-                'stats' => [
-                    ['Passengers', '140', 'Across today’s trips'],
-                    ['Checked in', '96', 'Ready to board'],
-                    ['Reserved', '44', 'Not yet checked in'],
-                ],
-                'table' => 'Passenger list',
-                'search' => 'Search passenger or reference code',
-                'statuses' => ['Checked in', 'Reserved'],
-                'columns' => [['Reference', 'bold'], ['Passenger', 'text'], ['Contact', 'text'], ['Route', 'text'], ['Passengers', 'text'], ['Status', 'status']],
-                'rows' => [
-                    ['0000-00001', 'Robert Zabala', '09123123123', 'Dinagat → Surigao City', '1', 'Checked in'],
-                    ['0000-00003', 'Juan Reyes', '09171234567', 'Surigao City → Dinagat', '3', 'Reserved'],
-                    ['0000-00004', 'Ana Santos', '09181234567', 'Libjo → Surigao City', '1', 'Reserved'],
-                ],
-                'note' => 'Showing 3 passengers · Example data',
-            ],
-            'cargo' => [
-                'eyebrow' => $eyebrow, 'crumb' => 'Cargo',
-                'title' => 'Cargo',
-                'subtitle' => 'Cargo registered for MV Isla Norte.',
-                'stats' => [
-                    ['Cargo pending', '14', 'Items awaiting check-in'],
-                    ['In transit', '20', 'Already on board'],
-                    ['Delivered', '52', 'Already received'],
-                ],
-                'table' => 'Cargo list',
-                'search' => 'Search tracking ID, sender, or receiver',
-                'statuses' => ['Pending', 'In transit', 'Delivered'],
-                'columns' => [['Tracking ID', 'bold'], ['Sender', 'text'], ['Receiver', 'text'], ['Items', 'text'], ['Qty', 'text'], ['Status', 'status']],
-                'rows' => [
-                    ['0000-00111', 'Robert Zabala', 'Earl Fermillan', 'Box of Coca Cola, Box of Sprite', '9', 'Pending'],
-                    ['0000-00113', 'Juan Reyes', 'Mark Reyes', 'Box of fish', '6', 'Delivered'],
-                    ['0000-00114', 'Ana Santos', 'Ben Santos', 'Bag of vegetables', '3', 'In transit'],
-                ],
-                'note' => 'Showing 3 deliveries · Example data',
-            ],
-            'reports' => [
-                'eyebrow' => $eyebrow, 'crumb' => 'Reports',
-                'title' => 'Reports',
-                'subtitle' => 'Daily summary for MV Isla Norte.',
-                'stats' => [
-                    ['Completed trips', '2 / 6', 'Scheduled crossings today'],
-                    ['Passengers checked in', '96', 'Across completed trips'],
-                    ['Cargo registered', '29', 'Items today'],
-                ],
-                'table' => 'Route activity',
-                'search' => 'Search route',
-                'statuses' => [],
-                'columns' => [['Route', 'bold'], ['Completed trips', 'text'], ['Passengers', 'text'], ['Cargo items', 'text']],
-                'rows' => [
-                    ['Surigao City → Dinagat', '1', '40', '12'],
-                    ['Surigao City → Cabungaan', '1', '56', '17'],
-                    ['Surigao City → Cagdianao', '0', '0', '0'],
-                    ['Surigao City → Del Carmen', '0', '0', '0'],
-                ],
-                'note' => 'Showing 4 routes · Example data',
-            ],
             'notifications' => [
                 'eyebrow' => $eyebrow, 'crumb' => 'Notifications',
                 'title' => 'Notifications',
                 'subtitle' => 'Updates about reservations, the waiting list, and cargo.',
                 'stats' => [
-                    ['Unread', '3', 'Need your attention'],
-                    ['Today', '6', 'Received today'],
-                    ['This week', '17', 'All notifications'],
+                    ['Unread', '3', 'Need your attention', 'bell'],
+                    ['Today', '6', 'Received today', 'calendar'],
+                    ['This week', '17', 'All notifications', 'clipboard'],
                 ],
                 'table' => 'Latest notifications',
                 'search' => 'Search notifications',
@@ -658,24 +757,6 @@ class SampleData
                     ['Yesterday, 17:00', 'Daily report is ready.', 'Report', 'Read'],
                 ],
                 'note' => 'Showing 4 notifications · Example data',
-            ],
-            'profile' => [
-                'eyebrow' => 'ACCOUNT', 'crumb' => 'Profile',
-                'title' => 'Business profile',
-                'subtitle' => 'Your business details as approved by the administrator.',
-                'toolbar' => false,
-                'stats' => [],
-                'table' => 'Details',
-                'columns' => [['Detail', 'bold'], ['Information', 'text']],
-                'rows' => [
-                    ['Business name', 'Isla Norte Transport'],
-                    ['Lantsa', 'MV Isla Norte'],
-                    ['Service', 'Passenger & cargo'],
-                    ['Email address', 'islanorte@sursea.example'],
-                    ['Business address', 'Surigao City, Surigao del Norte'],
-                    ['Approval status', 'Approved by administrator'],
-                ],
-                'note' => 'Example data',
             ],
         ];
     }

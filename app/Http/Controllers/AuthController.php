@@ -78,14 +78,16 @@ class AuthController extends Controller
             'contact' => $data['contact'],
         ];
 
+        $accounts = $request->session()->get('registered_accounts', []);
+
         if ($data['role'] === 'operator') {
             $account['business'] = $data['business'];
             $account['lantsa'] = $data['lantsa'];
             $account['approved'] = false; // an admin must approve it first
+            $account['app_id'] = 'OP-2026-0'.(42 + count($accounts));
         }
 
         // No database yet, so we keep new accounts in the session.
-        $accounts = $request->session()->get('registered_accounts', []);
         $accounts[] = $account;
         $request->session()->put('registered_accounts', $accounts);
 

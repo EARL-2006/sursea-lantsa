@@ -56,11 +56,8 @@ class PassengerController extends Controller
 
     public function waitingList()
     {
-        // Only full trips can have a waiting list
-        $trips = array_filter(SampleData::trips(), fn ($trip) => $trip['status'] === 'Full');
-
         return view('passenger.waiting-list', [
-            'trips' => $trips,
+            'trips' => SampleData::waitingListTrips(),
             'waitlist' => session('waitlist'),
         ]);
     }
@@ -86,7 +83,7 @@ class PassengerController extends Controller
         $trip = $this->findTrip($id);
 
         // A full trip cannot be reserved, only waitlisted
-        if ($trip['status'] === 'Full') {
+        if ($trip['status'] === 'Full' || $trip['left'] < 1) {
             return redirect()->route('waitlist.form', $trip['id']);
         }
 
@@ -101,9 +98,33 @@ class PassengerController extends Controller
         ]);
 
         $number = $this->nextNumber('ref_counter', 0);
-        $ticket = $this->passengerTicket($trip, $data, sprintf('0000-%05d', $number), false);
+        $ref = sprintf('0000-%05d', $number);
+        $ticket = $this->passengerTicket($trip, $data, $ref, false);
 
-        session(['reservation' => $ticket]);
+        // Automatically update available seat count based on confirmed reservation
+        $booked = session('trip_booked_seats', []);
+        $booked[$trip['id']] = ($booked[$trip['id']] ?? 0) + (int) $data['passengers'];
+        session(['trip_booked_seats' => $booked]);
+
+        // Also record in the live Passenger Manifest for Operator & Admin portals
+        $customManifests = session('custom_manifests', []);
+        array_unshift($customManifests, [
+            'ref' => $ref,
+            'name' => $ticket['name'],
+            'contact' => $ticket['contact'],
+            'route' => $trip['from'].' → '.$trip['to'],
+            'departure' => strtoupper($trip['departure']),
+            'date' => $trip['date'],
+            'lantsa' => $trip['lantsa'],
+            'passengers' => $ticket['passengers'],
+            'cargo_qty' => $ticket['cargo_qty'],
+            'total' => $ticket['total'],
+            'status' => 'Reserved',
+        ]);
+        session([
+            'custom_manifests' => $customManifests,
+            'reservation' => $ticket,
+        ]);
 
         return redirect()->route('seat.form', $trip['id'])->with('show_ticket', true);
     }
@@ -115,11 +136,6 @@ class PassengerController extends Controller
     public function waitlistForm($id)
     {
         $trip = $this->findTrip($id);
-
-        if ($trip['status'] !== 'Full') {
-            return redirect()->route('seat.form', $trip['id'])
-                ->with('notice', 'Seats are still available on this trip, you can reserve a seat directly.');
-        }
 
         return view('passenger.waitlist-form', ['trip' => $trip]);
     }
@@ -139,9 +155,43 @@ class PassengerController extends Controller
         ]);
 
         $number = $this->nextNumber('ref_counter', 0);
-        $ticket = $this->passengerTicket($trip, $data, sprintf('0000-%05d', $number), true);
+        $ref = sprintf('0000-%05d', $number);
+        $ticket = $this->passengerTicket($trip, $data, $ref, true);
 
-        session(['waitlist' => $ticket]);
+        // Add to waiting list records for Operator & Admin portals
+        $customWaitlist = session('custom_waitlist', []);
+        $customWaitlist[] = [
+            'id' => 'WL-'.(10 + count($customWaitlist)),
+            'position' => 5 + count($customWaitlist),
+            'ref' => $ref,
+            'name' => $ticket['name'],
+            'contact' => $ticket['contact'],
+            'route' => $trip['from'].' → '.$trip['to'],
+            'lantsa' => $trip['lantsa'],
+            'passengers' => $ticket['passengers'],
+            'status' => 'Waiting',
+        ];
+
+        $customManifests = session('custom_manifests', []);
+        array_unshift($customManifests, [
+            'ref' => $ref,
+            'name' => $ticket['name'],
+            'contact' => $ticket['contact'],
+            'route' => $trip['from'].' → '.$trip['to'],
+            'departure' => strtoupper($trip['departure']),
+            'date' => $trip['date'],
+            'lantsa' => $trip['lantsa'],
+            'passengers' => $ticket['passengers'],
+            'cargo_qty' => $ticket['cargo_qty'],
+            'total' => $ticket['total'],
+            'status' => 'Waiting',
+        ]);
+
+        session([
+            'custom_waitlist' => $customWaitlist,
+            'custom_manifests' => $customManifests,
+            'waitlist' => $ticket,
+        ]);
 
         return redirect()->route('waitlist.form', $trip['id'])->with('show_ticket', true);
     }
@@ -177,19 +227,33 @@ class PassengerController extends Controller
         }
 
         $names = array_column($items, 'name');
+        $qty = array_sum(array_column($items, 'qty'));
         $number = $this->nextNumber('cargo_counter', 110); // first tracking ID = 0000-00111
+        $ref = sprintf('0000-%05d', $number);
 
-        session(['cargo' => [
+        $cargoTicket = [
             'type' => 'cargo',
-            'ref' => sprintf('0000-%05d', $number),
+            'ref' => $ref,
             'sender' => $data['sender_name'],
             'sender_contact' => $data['sender_contact'],
             'receiver' => $data['receiver_name'],
             'receiver_contact' => $data['receiver_contact'],
             'items' => implode(', ', $names),
-            'qty' => array_sum(array_column($items, 'qty')),
+            'qty' => $qty,
+            'route' => $trip['from'].' → '.$trip['to'],
+            'departure' => strtoupper($trip['departure']),
             'lantsa' => $trip['lantsa'],
-        ]]);
+            'fee' => $qty * self::CARGO_FEE,
+            'status' => 'Pending',
+        ];
+
+        $customCargos = session('custom_cargos', []);
+        array_unshift($customCargos, $cargoTicket);
+
+        session([
+            'custom_cargos' => $customCargos,
+            'cargo' => $cargoTicket,
+        ]);
 
         return redirect()->route('cargo.form', $trip['id'])->with('show_ticket', true);
     }

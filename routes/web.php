@@ -48,7 +48,19 @@ Route::middleware('role:operator')->prefix('operator')->name('operator.')->group
     Route::get('/', fn () => redirect()->route('operator.dashboard'));
     Route::get('/dashboard', [OperatorController::class, 'dashboard'])->name('dashboard');
 
-    // Pages that share one simple table layout
+    Route::post('/trip-schedule', [OperatorController::class, 'tripStore'])->name('trips.store');
+    Route::post('/trip-schedule/{id}/status', [OperatorController::class, 'tripStatus'])->name('trips.status');
+
+    Route::post('/waiting-list/{ref}/promote', [OperatorController::class, 'waitlistPromote'])->name('waitlist.promote');
+    Route::post('/check-in/verify', [OperatorController::class, 'checkinVerify'])->name('checkin.verify');
+    Route::get('/manifest/export', [OperatorController::class, 'manifestExport'])->name('manifest.export');
+
+    Route::post('/cargo', [OperatorController::class, 'cargoStore'])->name('cargo.store');
+    Route::post('/cargo/{ref}/status', [OperatorController::class, 'cargoStatus'])->name('cargo.status');
+
+    Route::get('/reports/export', [OperatorController::class, 'reportsExport'])->name('reports.export');
+    Route::post('/profile', [OperatorController::class, 'profileSave'])->name('profile.save');
+
     Route::get('/{module}', [OperatorController::class, 'module'])
         ->name('module')
         ->whereIn('module', [
@@ -75,7 +87,26 @@ Route::middleware('role:admin')->prefix('admin')->name('admin.')->group(function
     Route::get('/settings', [AdminController::class, 'settings'])->name('settings');
     Route::post('/settings', [AdminController::class, 'settingsSave'])->name('settings.save');
 
-    // The "missing modules" that were not in the Figma file
+    // Lantsa & Routes actions
+    Route::post('/lantsa-routes', [AdminController::class, 'lantsaStore'])->name('lantsa.store');
+    Route::post('/lantsa-routes/{id}/status', [AdminController::class, 'lantsaStatus'])->name('lantsa.status');
+
+    // Trip Schedule actions
+    Route::get('/trip-schedule/export', [AdminController::class, 'tripsExport'])->name('trips.export');
+    Route::post('/trip-schedule', [AdminController::class, 'tripStore'])->name('trips.store');
+    Route::post('/trip-schedule/{id}/status', [AdminController::class, 'tripStatus'])->name('trips.status');
+
+    // Passenger Manifest actions
+    Route::get('/passenger-manifest/export', [AdminController::class, 'manifestExport'])->name('manifest.export');
+    Route::post('/passenger-manifest', [AdminController::class, 'manifestStore'])->name('manifest.store');
+    Route::post('/passenger-manifest/verify', [AdminController::class, 'manifestVerify'])->name('manifest.verify');
+    Route::post('/passenger-manifest/{ref}/status', [AdminController::class, 'manifestStatus'])->name('manifest.status');
+
+    // Cargo actions
+    Route::get('/cargo/export', [AdminController::class, 'cargoExport'])->name('cargo.export');
+    Route::post('/cargo', [AdminController::class, 'cargoStore'])->name('cargo.store');
+    Route::post('/cargo/{ref}/status', [AdminController::class, 'cargoStatus'])->name('cargo.status');
+
     Route::get('/{module}', [AdminController::class, 'module'])
         ->name('module')
         ->whereIn('module', [

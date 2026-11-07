@@ -655,6 +655,98 @@ table.data tfoot td {
     color: var(--muted);
 }
 
+/* ---------- module actions, verify bar & ticket modal ---------- */
+.action-group,
+.inline-action-form {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.compact-select {
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    border-radius: 8px;
+}
+.verify-bar {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 12px;
+    align-items: center;
+}
+.ticket {
+    background: #fff;
+    border: 1px solid #000;
+    border-radius: 26px;
+    width: 100%;
+    max-width: 560px;
+    font-family: "Poppins", sans-serif;
+    overflow: hidden;
+}
+.ticket-head {
+    position: relative;
+    padding: 22px 60px 18px;
+    text-align: center;
+    border-bottom: 1px solid #000;
+}
+.ticket-head h2 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: #000;
+}
+.modal-close {
+    position: absolute;
+    right: 18px;
+    top: 22px;
+    background: none;
+    border: none;
+    color: #000;
+}
+.modal-close .icon {
+    width: 32px;
+    height: 32px;
+}
+.ticket-body {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr;
+    gap: 14px 12px;
+    padding: 22px 28px;
+    color: #000;
+    font-size: 0.9rem;
+}
+.ticket-body dt {
+    font-weight: 600;
+}
+.ticket-body dd {
+    word-break: break-word;
+}
+.ticket-foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    padding: 18px 28px 24px;
+    border-top: 1px solid #000;
+    color: #000;
+    font-size: 0.9rem;
+}
+.ticket-foot .total {
+    display: flex;
+    gap: 32px;
+    font-size: 1.05rem;
+    margin-bottom: 8px;
+}
+.qr {
+    width: 130px;
+    height: 130px;
+    flex-shrink: 0;
+}
+.qr svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
 /* ---------- small screens ---------- */
 @media (max-width: 1000px) {
     .panel {
@@ -670,7 +762,8 @@ table.data tfoot td {
     .review-grid,
     .settings-grid,
     .form-two,
-    .toolbar {
+    .toolbar,
+    .verify-bar {
         grid-template-columns: 1fr;
     }
     .page-head {
